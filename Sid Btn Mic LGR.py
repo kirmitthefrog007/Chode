@@ -1,6 +1,12 @@
 import tkinter as tk
+import os
+import sys
+import time
+import traceback
+import ctypes
+import requests
+import threading
 from PIL import Image, ImageTk, ImageEnhance
-import traceback, sys, os, ctypes, requests, threading, time
 from pynput import mouse, keyboard
 import speech_recognition as sr
 import pyttsx3
@@ -50,11 +56,19 @@ class SidCore:
             self.recognizer = sr.Recognizer()
             self.mic = sr.Microphone()
             self.is_active = False
+            self.permanent_kill = False
             self.pulse_scale = 0
             self.pulse_direction = 1
             self.pressed_keys = set()
 
-            self.mouse_l = mouse.Listener(on_click=self.on_mouse_click)
+            # Note: Setting suppress=True here would block ALL mouse input (including move/click)
+            # instead of just the side buttons. We use suppress=False and let the
+            # win32_event_filter handle selective suppression by returning False.
+            self.mouse_l = mouse.Listener(
+                on_click=self.on_mouse_click,
+                suppress=False,
+                win32_event_filter=self.win32_event_filter
+            )
             self.mouse_l.start()
             self.key_l = keyboard.Listener(on_press=self.on_key_press, on_release=self.on_key_release)
             self.key_l.start()
@@ -87,6 +101,15 @@ class SidCore:
                     write_crash_log(f"Audio Critical Failure: {e}")
         threading.Thread(target=audio_thread, daemon=True).start()
 
+    def win32_event_filter(self, msg, data):
+        # Suppress Button.x1 (Back) and Button.x2 (Forward) to stop browser navigation interference
+        # WM_XBUTTONDOWN = 523, WM_XBUTTONUP = 524
+        if msg in (523, 524):
+            xbutton = data.mouseData >> 16
+            if xbutton in (1, 2):
+                return False
+        return True
+
     def send_to_lm_studio(self, text):
         try:
             payload = {
@@ -106,16 +129,49 @@ class SidCore:
     def capture_audio(self):
         try:
             with self.mic as source:
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.2)
-                audio = self.recognizer.listen(source, phrase_time_limit=10)
-            user_text = self.recognizer.recognize_google(audio)
-            self.send_to_lm_studio(user_text)
-        except Exception: pass
+                # Always-on listening with dynamic threshold to ignore background noise
+                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                self.recognizer.dynamic_energy_threshold = True
+
+                while not self.permanent_kill:
+                    try:
+                        # Infinite loop: no timeout or phrase time limit
+                        audio = self.recognizer.listen(source, timeout=None, phrase_time_limit=None)
+                        if self.permanent_kill: break
+
+                        user_text = self.recognizer.recognize_google(audio)
+                        if user_text:
+                            self.send_to_lm_studio(user_text)
+                    except sr.UnknownValueError:
+                        continue # Keep listening
+                    except sr.RequestError:
+                        break
+                    except Exception:
+                        break
+        except Exception:
+            write_crash_log(traceback.format_exc())
+        finally:
+            self.deactivate()
 
     def activate(self):
         if not self.is_active:
             self.is_active = True
             threading.Thread(target=self.capture_audio, daemon=True).start()
+
+    def trigger_permanent_kill(self):
+        self.permanent_kill = True
+        self.is_active = False
+
+        # UI updates must be on the main thread
+        def final_kill():
+            try:
+                self.label.config(text="KILL", fg="red", image='')
+                self.root.update()
+                time.sleep(0.5) # Allow user to see the kill state before termination
+            except: pass
+            os._exit(0)
+
+        self.root.after(0, final_kill)
 
     def deactivate(self):
         if self.is_active:
@@ -125,14 +181,13 @@ class SidCore:
             else:
                 self.root.after(0, lambda: self.label.config(fg="red"))
 
-    # --- SMALL SECTION UPDATE: 0.5s DELAY ---
     def on_mouse_click(self, x, y, button, pressed):
         if button == mouse.Button.x1:
             if pressed:
-                self.activate()
-            else:
-                # Half-second delay before allowing the system to reset state
-                threading.Timer(0.5, self.deactivate).start()
+                if self.is_active:
+                    self.trigger_permanent_kill()
+                else:
+                    self.activate()
 
     def on_key_press(self, key):
         try:
