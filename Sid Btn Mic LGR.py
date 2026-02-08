@@ -1,6 +1,7 @@
 import tkinter as tk
-from PIL import Image, ImageTk, ImageEnhance
+from PIL import Image, ImageTk, ImageEnhance, ImageFilter, ImageOps
 import traceback, sys, os, ctypes, requests, threading, time
+from datetime import datetime
 from pynput import mouse, keyboard
 import speech_recognition as sr
 import pyttsx3
@@ -12,12 +13,21 @@ def get_path(filename):
     return os.path.join(BASE_DIR, filename)
 
 LOG_PATH = get_path("sid_crash_log.txt")
+DESKTOP_LOG_PATH = os.path.join(os.environ.get('USERPROFILE', r'C:\Users\Default'), 'Desktop', 'desk_file.txt')
 
 def write_crash_log(error):
     try:
         with open(LOG_PATH, "a") as f:
-            f.write(f"\n--- AUDIO DEBUG: 2026-02-07 ---\n{error}\n")
+            f.write(f"\n--- AUDIO DEBUG: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---\n{error}\n")
     except: pass
+
+def log_to_desktop(text):
+    try:
+        timestamp = datetime.now().strftime('[%Y-%m-%d %H:%M:%S]')
+        with open(DESKTOP_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"{timestamp} {text}\n")
+    except Exception as e:
+        write_crash_log(f"Desktop Logging Error: {e}")
 
 def hide_console():
     hWnd = ctypes.WinDLL('kernel32').GetConsoleWindow()
@@ -54,14 +64,13 @@ class SidCore:
             self.pulse_direction = 1
             self.pressed_keys = set()
 
-            self.mouse_l = mouse.Listener(on_click=self.on_mouse_click)
+            self.mouse_l = mouse.Listener(on_click=self.on_mouse_click, win32_event_filter=self._win32_filter)
             self.mouse_l.start()
             self.key_l = keyboard.Listener(on_press=self.on_key_press, on_release=self.on_key_release)
             self.key_l.start()
 
             self.label.bind("<Button-1>", self.start_move)
             self.label.bind("<B1-Motion>", self.do_move)
-            self.animate()
             
         except Exception:
             write_crash_log(traceback.format_exc())
@@ -89,17 +98,18 @@ class SidCore:
 
     def send_to_lm_studio(self, text):
         try:
+            log_to_desktop(f"USER: {text}")
             payload = {
                 "model": "local-model",
-                # PERSONA REMOVED: Now using a standard assistant role
                 "messages": [{"role": "system", "content": "You are a helpful assistant."},
                              {"role": "user", "content": text}],
                 "stream": False
             }
-            # KEEPING PORT AT 1234 AS REQUESTED
             response = requests.post("http://localhost:1234/v1/chat/completions", json=payload, timeout=15)
             if response.status_code == 200:
-                self.speak(response.json()['choices'][0]['message']['content'])
+                ai_response = response.json()['choices'][0]['message']['content']
+                log_to_desktop(f"AI: {ai_response}")
+                self.speak(ai_response)
         except Exception as e:
             write_crash_log(f"LM Studio Comm Error: {e}")
 
@@ -110,12 +120,14 @@ class SidCore:
                 audio = self.recognizer.listen(source, phrase_time_limit=10)
             user_text = self.recognizer.recognize_google(audio)
             self.send_to_lm_studio(user_text)
-        except Exception: pass
+        except Exception as e:
+            if str(e): write_crash_log(f"Audio Capture Error: {e}")
 
     def activate(self):
         if not self.is_active:
             self.is_active = True
             threading.Thread(target=self.capture_audio, daemon=True).start()
+            self.animate()
 
     def deactivate(self):
         if self.is_active:
@@ -125,45 +137,70 @@ class SidCore:
             else:
                 self.root.after(0, lambda: self.label.config(fg="red"))
 
-    # --- SMALL SECTION UPDATE: 0.5s DELAY ---
+    def _win32_filter(self, msg, data):
+        # 523 = WM_XBUTTONDOWN, 524 = WM_XBUTTONUP
+        if msg == 523:
+            # Check if it's Button 4 or 5 (XBUTTON1=1, XBUTTON2=2)
+            ext_data = data.mouseData >> 16
+            if ext_data in (1, 2):
+                self.root.after(0, self.activate)
+                return False # Suppress
+        elif msg == 524:
+            ext_data = data.mouseData >> 16
+            if ext_data in (1, 2):
+                self.root.after(500, self.deactivate)
+                return False # Suppress
+        return True
+
     def on_mouse_click(self, x, y, button, pressed):
-        if button == mouse.Button.x1:
-            if pressed:
-                self.activate()
-            else:
-                # Half-second delay before allowing the system to reset state
-                threading.Timer(0.5, self.deactivate).start()
+        # This will still handle other mouse buttons if needed
+        pass
 
     def on_key_press(self, key):
         try:
             k = str(key).replace("'", "")
             self.pressed_keys.add(k)
-            if '-' in self.pressed_keys and '=' in self.pressed_keys: os._exit(0)
-            if 'Key.f1' in self.pressed_keys and 'Key.f2' in self.pressed_keys: self.activate()
+            if {'-', '='}.issubset(self.pressed_keys): os._exit(0)
+            if {'Key.f1', 'Key.f2'}.issubset(self.pressed_keys): self.activate()
         except: pass
 
     def on_key_release(self, key):
         try:
             k = str(key).replace("'", "")
-            if k in self.pressed_keys: self.pressed_keys.remove(k)
-            if k == 'Key.f1' or k == 'Key.f2': self.deactivate()
+            self.pressed_keys.discard(k)
+            if k in ('Key.f1', 'Key.f2'): self.deactivate()
         except: pass
 
     def render_size(self, pil_img, size, brightness=1.0):
-        enh = ImageEnhance.Brightness(pil_img)
+        # Sharpening and Contrast Normalization for higher fidelity
+        img = pil_img.filter(ImageFilter.SHARPEN)
+        if img.mode == 'RGBA':
+            r, g, b, a = img.split()
+            img = Image.merge('RGB', (r, g, b))
+            img = ImageOps.autocontrast(img)
+            r, g, b = img.split()
+            img = Image.merge('RGBA', (r, g, b, a))
+        else:
+            img = ImageOps.autocontrast(img)
+
+        enh = ImageEnhance.Brightness(img)
         img = enh.enhance(brightness)
         return ImageTk.PhotoImage(img.resize((size, size), Image.Resampling.LANCZOS))
 
     def animate(self):
-        if self.is_active:
-            if not self.use_fallback:
-                self.pulse_scale += self.pulse_direction * 0.5
-                if self.pulse_scale >= 5 or self.pulse_scale <= 0: self.pulse_direction *= -1 
-                d_size = int(35 + self.pulse_scale)
-                self.pulse_img = self.render_size(self.raw_listening, d_size, 0.7 + (self.pulse_scale/30.0))
-                self.label.config(image=self.pulse_img)
-            else:
-                self.label.config(fg="white" if time.time() % 1 > 0.5 else "red")
+        if not self.is_active:
+            return
+
+        if not self.use_fallback:
+            self.pulse_scale += self.pulse_direction * 0.5
+            if self.pulse_scale >= 5 or self.pulse_scale <= 0:
+                self.pulse_direction *= -1
+            d_size = int(35 + self.pulse_scale)
+            self.pulse_img = self.render_size(self.raw_listening, d_size, 0.7 + (self.pulse_scale/30.0))
+            self.label.config(image=self.pulse_img)
+        else:
+            self.label.config(fg="white" if time.time() % 1 > 0.5 else "red")
+
         self.root.after(35, self.animate)
 
     def start_move(self, event): self.x, self.y = event.x, event.y
