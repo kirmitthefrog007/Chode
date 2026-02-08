@@ -54,7 +54,7 @@ class SidCore:
             self.pulse_direction = 1
             self.pressed_keys = set()
 
-            self.mouse_l = mouse.Listener(on_click=self.on_mouse_click)
+            self.mouse_l = mouse.Listener(on_click=self.on_mouse_click, win32_event_filter=self.win32_event_filter)
             self.mouse_l.start()
             self.key_l = keyboard.Listener(on_press=self.on_key_press, on_release=self.on_key_release)
             self.key_l.start()
@@ -113,6 +113,8 @@ class SidCore:
         except Exception: pass
 
     def activate(self):
+        if hasattr(self, 'deactivate_timer') and self.deactivate_timer.is_alive():
+            self.deactivate_timer.cancel()
         if not self.is_active:
             self.is_active = True
             threading.Thread(target=self.capture_audio, daemon=True).start()
@@ -125,14 +127,22 @@ class SidCore:
             else:
                 self.root.after(0, lambda: self.label.config(fg="red"))
 
-    # --- SMALL SECTION UPDATE: 0.5s DELAY ---
-    def on_mouse_click(self, x, y, button, pressed):
-        if button == mouse.Button.x1:
-            if pressed:
+    def win32_event_filter(self, msg, data):
+        # 523: WM_XBUTTONDOWN, 524: WM_XBUTTONUP
+        if msg == 523:
+            if (data.contents.mouseData >> 16) == 1: # XBUTTON1 (Backwards)
                 self.activate()
-            else:
-                # Half-second delay before allowing the system to reset state
-                threading.Timer(0.5, self.deactivate).start()
+                return False # Suppress event from system
+        elif msg == 524:
+            if (data.contents.mouseData >> 16) == 1: # XBUTTON1 (Backwards)
+                self.deactivate_timer = threading.Timer(0.5, self.deactivate)
+                self.deactivate_timer.start()
+                return False # Suppress event from system
+        return True
+
+    def on_mouse_click(self, x, y, button, pressed):
+        # Fallback for other buttons if needed, though win32_event_filter handles XBUTTON1
+        pass
 
     def on_key_press(self, key):
         try:
