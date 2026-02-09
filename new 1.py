@@ -29,10 +29,11 @@ PATHS = {
     "SILLY_TAVERN": r"C:\Users\Yoda\SillyTavern\Start.bat"
 }
 
-URL_ALLTALK = "http://127.0.0.1:7852?__theme=dark" 
-ALLTALK_PORT = 7852
+URL_ALLTALK = "http://127.0.0.1:7851?__theme=dark"
+ALLTALK_PORT = 7851
 DESKTOP = os.path.join(os.path.expanduser("~"), "Desktop")
 LOG_PATH = os.path.join(DESKTOP, "LGR_BOOT_DIAGNOSTICS.txt")
+ALLTALK_LOG = os.path.join(DESKTOP, "ALLTALK_OUTPUT.log")
 
 # --- THEME ---
 BG_COLOR, PATTERN_COLOR, BORDER_COLOR = "#0D0221", "#261447", "#00FFC8"
@@ -110,13 +111,18 @@ def boot_logic(gui):
             gui.update_status("ALLTALK", "ERR: SH MISSING", BORDER_COLOR)
         else:
             # Use --login to ensure the .sh script sees the environment variables
+            # Convert path to use forward slashes for Bash compatibility
+            bash_script_path = PATHS["ALLTALK"].replace("\\", "/")
+            # Redirecting stdout/stderr to a file to prevent buffer-fill hangs and allow debugging
+            out_file = open(ALLTALK_LOG, "w")
             proc = subprocess.Popen(
-                [PATHS["GIT_BASH"], "--login", "-c", f'"{PATHS["ALLTALK"]}"'],
+                [PATHS["GIT_BASH"], "--login", "-c", f'"{bash_script_path}"'],
                 cwd=os.path.dirname(PATHS["ALLTALK"]),
                 creationflags=subprocess.CREATE_NO_WINDOW,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True
+                stdout=out_file,
+                stderr=out_file,
+                text=True,
+                bufsize=1 # Line buffered
             )
             log_event("ALLTALK", "Subprocess spawned")
 
@@ -142,7 +148,7 @@ def boot_logic(gui):
             gui.update_status("STATUS", "Net: ONLINE")
         else:
             gui.update_status("ALLTALK", "Voice: TIMEOUT", BORDER_COLOR)
-            log_event("NET", "Port 7852 failed to open within 90s.", True)
+            log_event("NET", f"Port {ALLTALK_PORT} failed to open within 90s.", True)
 
     except Exception as e:
         log_event("CRASH", traceback.format_exc(), True)
