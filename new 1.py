@@ -31,6 +31,8 @@ PATHS = {
 
 URL_ALLTALK = "http://127.0.0.1:7851?__theme=dark"
 ALLTALK_PORT = 7851
+URL_SILLY = "http://127.0.0.1:8000"
+SILLY_PORT = 8000
 DESKTOP = os.path.join(os.path.expanduser("~"), "Desktop")
 LOG_PATH = os.path.join(DESKTOP, "LGR_BOOT_DIAGNOSTICS.txt")
 ALLTALK_LOG = os.path.join(DESKTOP, "ALLTALK_OUTPUT.log")
@@ -148,20 +150,33 @@ def boot_logic(gui):
 
         # 3. Start SillyTavern
         if os.path.exists(PATHS["SILLY_TAVERN"]):
-            subprocess.Popen([PATHS["SILLY_TAVERN"]], 
-                             cwd=os.path.dirname(PATHS["SILLY_TAVERN"]), 
-                             creationflags=subprocess.CREATE_NEW_CONSOLE, shell=True)
-            gui.update_status("SILLY", "Silly: ACTIVE")
+            gui.update_status("SILLY", "Silly: STARTING...", TEXT_ACCENT)
+            # Using startfile for .bat is often more stable for persistent console apps
+            os.startfile(PATHS["SILLY_TAVERN"])
+        else:
+            log_event("SILLY", "Path not found", True)
+            gui.update_status("SILLY", "Silly: ERR")
 
         # 4. Network Verification
         gui.update_status("STATUS", "Net: SCANNING...", TEXT_ACCENT)
+
+        # Verify AllTalk
         if wait_for_port(ALLTALK_PORT):
             gui.update_status("ALLTALK", "Voice: READY")
             webbrowser.open_new_tab(URL_ALLTALK)
-            gui.update_status("STATUS", "Net: ONLINE")
         else:
             gui.update_status("ALLTALK", "Voice: TIMEOUT", BORDER_COLOR)
-            log_event("NET", f"Port {ALLTALK_PORT} failed to open within 90s.", True)
+            log_event("NET", f"Port {ALLTALK_PORT} (AllTalk) failed to open within 90s.", True)
+
+        # Verify SillyTavern
+        if wait_for_port(SILLY_PORT):
+            gui.update_status("SILLY", "Silly: READY")
+            webbrowser.open_new_tab(URL_SILLY)
+        else:
+            gui.update_status("SILLY", "Silly: TIMEOUT", BORDER_COLOR)
+            log_event("NET", f"Port {SILLY_PORT} (Silly) failed to open within 90s.", True)
+
+        gui.update_status("STATUS", "Net: ONLINE")
 
     except Exception as e:
         log_event("CRASH", traceback.format_exc(), True)
