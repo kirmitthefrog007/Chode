@@ -1,0 +1,6 @@
+[2026-02-09 12:50:45] Calibrating microphone...
+[2026-02-09 12:50:51] Capture Error: This audio source is already inside a context manager
+[2026-02-09 12:50:53] Capture Error: This audio source is already inside a context manager
+[2026-02-09 12:50:57] Listening timed out (no speech detected).
+[2026-02-09 12:51:01] Speech recognition could not understand audio.
+[2026-02-09 12:51:11] Shutdown initiated.
