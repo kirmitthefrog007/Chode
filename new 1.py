@@ -60,13 +60,26 @@ class RetroBootGUI:
         self.container = tk.Frame(self.root, bg=BG_COLOR, highlightbackground=BORDER_COLOR, highlightthickness=2)
         self.container.place(relx=0.05, rely=0.05, relwidth=0.9, relheight=0.9)
         
-        tk.Label(self.container, text="NEON BOOT v2.2", font=("Courier", 10, "bold"), fg=BORDER_COLOR, bg=BG_COLOR).pack(pady=5)
+        title = tk.Label(self.container, text="NEON BOOT v2.2", font=("Courier", 10, "bold"), fg=BORDER_COLOR, bg=BG_COLOR)
+        title.pack(pady=5)
         self.items = {
             "ALLTALK": self.create_label("Voice: STANDBY"),
             "LM_STUDIO": self.create_label("LLM: STANDBY"),
             "SILLY": self.create_label("Silly: STANDBY"),
             "STATUS": self.create_label("Net: STANDBY")
         }
+
+        # Drag bindings
+        for widget in [self.root, self.container, title] + list(self.items.values()):
+            widget.bind("<Button-1>", self.start_move)
+            widget.bind("<B1-Motion>", self.do_move)
+
+    def start_move(self, event):
+        self.x, self.y = event.x, event.y
+
+    def do_move(self, event):
+        x, y = self.root.winfo_x() + (event.x - self.x), self.root.winfo_y() + (event.y - self.y)
+        self.root.geometry(f"+{x}+{y}")
 
     def create_label(self, text):
         lbl = tk.Label(self.container, text=text, font=("Courier", 8, "bold"), fg=TEXT_MAIN, bg=BG_COLOR)
