@@ -74,8 +74,8 @@ class RetroBootGUI:
         return lbl
 
     def update_status(self, key, text, color=TEXT_MAIN):
-        self.items[key].config(text=text, fg=color)
-        self.root.update()
+        # Thread-safe UI update
+        self.root.after(0, lambda: self.items[key].config(text=text, fg=color))
 
 def kill_processes():
     targets = ["node.exe", "python.exe"]
@@ -114,16 +114,16 @@ def boot_logic(gui):
             # Convert path to use forward slashes for Bash compatibility
             bash_script_path = PATHS["ALLTALK"].replace("\\", "/")
             # Redirecting stdout/stderr to a file to prevent buffer-fill hangs and allow debugging
-            out_file = open(ALLTALK_LOG, "w")
+            # Opening in binary mode and closing handle after Popen is safer for background processes
+            log_handle = open(ALLTALK_LOG, "wb")
             proc = subprocess.Popen(
-                [PATHS["GIT_BASH"], "--login", "-c", f'"{bash_script_path}"'],
+                [PATHS["GIT_BASH"], "--login", bash_script_path],
                 cwd=os.path.dirname(PATHS["ALLTALK"]),
                 creationflags=subprocess.CREATE_NO_WINDOW,
-                stdout=out_file,
-                stderr=out_file,
-                text=True,
-                bufsize=1 # Line buffered
+                stdout=log_handle,
+                stderr=subprocess.STDOUT
             )
+            log_handle.close()
             log_event("ALLTALK", "Subprocess spawned")
 
         # 2. Start LM Studio
@@ -155,7 +155,7 @@ def boot_logic(gui):
         gui.update_status("STATUS", "CRITICAL ERROR", "red")
     
     time.sleep(3)
-    gui.root.withdraw()
+    gui.root.after(0, gui.root.withdraw)
 
 if __name__ == "__main__":
     hWnd = ctypes.WinDLL('kernel32').GetConsoleWindow()
