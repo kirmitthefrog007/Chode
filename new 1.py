@@ -29,10 +29,13 @@ PATHS = {
     "SILLY_TAVERN": r"C:\Users\Yoda\SillyTavern\Start.bat"
 }
 
-URL_ALLTALK = "http://127.0.0.1:7852?__theme=dark" 
-ALLTALK_PORT = 7852
+URL_ALLTALK = "http://127.0.0.1:7851?__theme=dark"
+ALLTALK_PORT = 7851
+URL_SILLY = "http://127.0.0.1:8000"
+SILLY_PORT = 8000
 DESKTOP = os.path.join(os.path.expanduser("~"), "Desktop")
 LOG_PATH = os.path.join(DESKTOP, "LGR_BOOT_DIAGNOSTICS.txt")
+ALLTALK_LOG = os.path.join(DESKTOP, "ALLTALK_OUTPUT.log")
 
 # --- THEME ---
 BG_COLOR, PATTERN_COLOR, BORDER_COLOR = "#0D0221", "#261447", "#00FFC8"
@@ -59,7 +62,8 @@ class RetroBootGUI:
         self.container = tk.Frame(self.root, bg=BG_COLOR, highlightbackground=BORDER_COLOR, highlightthickness=2)
         self.container.place(relx=0.05, rely=0.05, relwidth=0.9, relheight=0.9)
         
-        tk.Label(self.container, text="NEON BOOT v2.2", font=("Courier", 10, "bold"), fg=BORDER_COLOR, bg=BG_COLOR).pack(pady=5)
+        title = tk.Label(self.container, text="NEON BOOT v2.2", font=("Courier", 10, "bold"), fg=BORDER_COLOR, bg=BG_COLOR)
+        title.pack(pady=5)
         self.items = {
             "ALLTALK": self.create_label("Voice: STANDBY"),
             "LM_STUDIO": self.create_label("LLM: STANDBY"),
@@ -67,14 +71,26 @@ class RetroBootGUI:
             "STATUS": self.create_label("Net: STANDBY")
         }
 
+        # Drag bindings
+        for widget in [self.root, self.container, title] + list(self.items.values()):
+            widget.bind("<Button-1>", self.start_move)
+            widget.bind("<B1-Motion>", self.do_move)
+
+    def start_move(self, event):
+        self.x, self.y = event.x, event.y
+
+    def do_move(self, event):
+        x, y = self.root.winfo_x() + (event.x - self.x), self.root.winfo_y() + (event.y - self.y)
+        self.root.geometry(f"+{x}+{y}")
+
     def create_label(self, text):
         lbl = tk.Label(self.container, text=text, font=("Courier", 8, "bold"), fg=TEXT_MAIN, bg=BG_COLOR)
         lbl.pack(anchor="center")
         return lbl
 
     def update_status(self, key, text, color=TEXT_MAIN):
-        self.items[key].config(text=text, fg=color)
-        self.root.update()
+        # Thread-safe UI update
+        self.root.after(0, lambda: self.items[key].config(text=text, fg=color))
 
 def kill_processes():
     targets = ["node.exe", "python.exe"]
@@ -110,14 +126,19 @@ def boot_logic(gui):
             gui.update_status("ALLTALK", "ERR: SH MISSING", BORDER_COLOR)
         else:
             # Use --login to ensure the .sh script sees the environment variables
+            # Convert path to use forward slashes for Bash compatibility
+            bash_script_path = PATHS["ALLTALK"].replace("\\", "/")
+            # Redirecting stdout/stderr to a file to prevent buffer-fill hangs and allow debugging
+            # Opening in binary mode and closing handle after Popen is safer for background processes
+            log_handle = open(ALLTALK_LOG, "wb")
             proc = subprocess.Popen(
-                [PATHS["GIT_BASH"], "--login", "-c", f'"{PATHS["ALLTALK"]}"'],
+                [PATHS["GIT_BASH"], "--login", bash_script_path],
                 cwd=os.path.dirname(PATHS["ALLTALK"]),
                 creationflags=subprocess.CREATE_NO_WINDOW,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                text=True
+                stdout=log_handle,
+                stderr=subprocess.STDOUT
             )
+            log_handle.close()
             log_event("ALLTALK", "Subprocess spawned")
 
         # 2. Start LM Studio
@@ -129,27 +150,40 @@ def boot_logic(gui):
 
         # 3. Start SillyTavern
         if os.path.exists(PATHS["SILLY_TAVERN"]):
-            subprocess.Popen([PATHS["SILLY_TAVERN"]], 
-                             cwd=os.path.dirname(PATHS["SILLY_TAVERN"]), 
-                             creationflags=subprocess.CREATE_NEW_CONSOLE, shell=True)
-            gui.update_status("SILLY", "Silly: ACTIVE")
+            gui.update_status("SILLY", "Silly: STARTING...", TEXT_ACCENT)
+            # Using startfile for .bat is often more stable for persistent console apps
+            os.startfile(PATHS["SILLY_TAVERN"])
+        else:
+            log_event("SILLY", "Path not found", True)
+            gui.update_status("SILLY", "Silly: ERR")
 
         # 4. Network Verification
         gui.update_status("STATUS", "Net: SCANNING...", TEXT_ACCENT)
+
+        # Verify AllTalk
         if wait_for_port(ALLTALK_PORT):
             gui.update_status("ALLTALK", "Voice: READY")
             webbrowser.open_new_tab(URL_ALLTALK)
-            gui.update_status("STATUS", "Net: ONLINE")
         else:
             gui.update_status("ALLTALK", "Voice: TIMEOUT", BORDER_COLOR)
-            log_event("NET", "Port 7852 failed to open within 90s.", True)
+            log_event("NET", f"Port {ALLTALK_PORT} (AllTalk) failed to open within 90s.", True)
+
+        # Verify SillyTavern
+        if wait_for_port(SILLY_PORT):
+            gui.update_status("SILLY", "Silly: READY")
+            webbrowser.open_new_tab(URL_SILLY)
+        else:
+            gui.update_status("SILLY", "Silly: TIMEOUT", BORDER_COLOR)
+            log_event("NET", f"Port {SILLY_PORT} (Silly) failed to open within 90s.", True)
+
+        gui.update_status("STATUS", "Net: ONLINE")
 
     except Exception as e:
         log_event("CRASH", traceback.format_exc(), True)
         gui.update_status("STATUS", "CRITICAL ERROR", "red")
     
     time.sleep(3)
-    gui.root.withdraw()
+    gui.root.after(0, gui.root.withdraw)
 
 if __name__ == "__main__":
     hWnd = ctypes.WinDLL('kernel32').GetConsoleWindow()
