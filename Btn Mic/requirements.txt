@@ -1,0 +1,7 @@
+faster-whisper
+pynput
+pycaw
+requests
+psutil
+numpy
+pyaudio
