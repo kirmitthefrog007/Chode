@@ -29,8 +29,8 @@ PATHS = {
     "SILLY_TAVERN": r"C:\Users\Yoda\SillyTavern\Start.bat"
 }
 
-URL_ALLTALK = "http://127.0.0.1:7852?__theme=dark" 
-ALLTALK_PORT = 7852
+URL_ALLTALK = "http://127.0.0.1:7851?__theme=dark"
+ALLTALK_PORT = 7851
 DESKTOP = os.path.join(os.path.expanduser("~"), "Desktop")
 LOG_PATH = os.path.join(DESKTOP, "LGR_BOOT_DIAGNOSTICS.txt")
 
@@ -85,15 +85,21 @@ def kill_processes():
                 proc.kill()
         except: continue
 
-def wait_for_port(port, timeout=90): # Increased timeout for model loading
+def wait_for_port(port, timeout=30): # Reduced timeout for faster verification
     start_time = time.time()
     while time.time() - start_time < timeout:
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=1.0):
                 return True
         except:
-            time.sleep(2)
+            time.sleep(1)
     return False
+
+def set_high_priority():
+    try:
+        p = psutil.Process(os.getpid())
+        p.nice(psutil.HIGH_PRIORITY_CLASS)
+    except: pass
 
 def boot_logic(gui):
     with open(LOG_PATH, "w") as f: f.write(f"--- DIAGNOSTIC RUN: {time.ctime()} ---\n")
@@ -152,6 +158,7 @@ def boot_logic(gui):
     gui.root.withdraw()
 
 if __name__ == "__main__":
+    set_high_priority()
     hWnd = ctypes.WinDLL('kernel32').GetConsoleWindow()
     if hWnd: ctypes.WinDLL('user32').ShowWindow(hWnd, 0)
     gui = RetroBootGUI()

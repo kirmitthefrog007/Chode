@@ -1,9 +1,10 @@
 import tkinter as tk
 from PIL import Image, ImageTk, ImageEnhance
-import traceback, sys, os, ctypes, requests, threading, time
+import traceback, sys, os, ctypes, requests, threading, time, psutil, io, numpy as np
 from pynput import mouse, keyboard
 import speech_recognition as sr
 import pyttsx3
+from faster_whisper import WhisperModel
 
 # --- FIXED DIRECTORY PATHING ---
 BASE_DIR = r"C:\Users\Yoda\LM\AI\Tools"
@@ -18,6 +19,13 @@ def write_crash_log(error):
         with open(LOG_PATH, "a") as f:
             f.write(f"\n--- AUDIO DEBUG: 2026-02-07 ---\n{error}\n")
     except: pass
+
+def set_high_priority():
+    try:
+        p = psutil.Process(os.getpid())
+        p.nice(psutil.HIGH_PRIORITY_CLASS)
+    except Exception as e:
+        write_crash_log(f"Failed to set high priority: {e}")
 
 def hide_console():
     hWnd = ctypes.WinDLL('kernel32').GetConsoleWindow()
@@ -49,6 +57,11 @@ class SidCore:
 
             self.recognizer = sr.Recognizer()
             self.mic = sr.Microphone()
+
+            # Initialize Faster-Whisper
+            model_size = "base.en"
+            self.whisper_model = WhisperModel(model_size, device="cuda", compute_type="float16")
+
             self.is_active = False
             self.pulse_scale = 0
             self.pulse_direction = 1
@@ -58,6 +71,8 @@ class SidCore:
             self.mouse_l.start()
             self.key_l = keyboard.Listener(on_press=self.on_key_press, on_release=self.on_key_release)
             self.key_l.start()
+
+            self.session = requests.Session()
 
             self.label.bind("<Button-1>", self.start_move)
             self.label.bind("<B1-Motion>", self.do_move)
@@ -70,8 +85,14 @@ class SidCore:
         def audio_thread():
             try:
                 alltalk_url = "http://127.0.0.1:7851/api/tts-generate"
-                payload = {"text_input": text, "character_voice_gen": "archer.wav", "autoplay": "true", "autoplay_volume": "0.8"}
-                response = requests.post(alltalk_url, data=payload, timeout=2)
+                payload = {
+                    "text_input": text,
+                    "character_voice_gen": "archer.wav",
+                    "autoplay": "true",
+                    "autoplay_volume": "0.8",
+                    "deepspeed": "True"
+                }
+                response = self.session.post(alltalk_url, data=payload, timeout=5)
                 if response.status_code != 200: raise ConnectionError("AllTalk Offline")
             except Exception:
                 try:
@@ -91,15 +112,18 @@ class SidCore:
         try:
             payload = {
                 "model": "local-model",
-                # PERSONA REMOVED: Now using a standard assistant role
-                "messages": [{"role": "system", "content": "You are a helpful assistant."},
-                             {"role": "user", "content": text}],
+                "messages": [
+                    {"role": "system", "content": "You are a helpful assistant."},
+                    {"role": "user", "content": text}
+                ],
                 "stream": False
             }
             # KEEPING PORT AT 1234 AS REQUESTED
-            response = requests.post("http://localhost:1234/v1/chat/completions", json=payload, timeout=15)
-            if response.status_code == 200:
-                self.speak(response.json()['choices'][0]['message']['content'])
+            response = self.session.post("http://localhost:1234/v1/chat/completions", json=payload, timeout=15)
+            response.raise_for_status()
+            content = response.json()['choices'][0]['message']['content']
+            if content:
+                self.speak(content)
         except Exception as e:
             write_crash_log(f"LM Studio Comm Error: {e}")
 
@@ -108,9 +132,18 @@ class SidCore:
             with self.mic as source:
                 self.recognizer.adjust_for_ambient_noise(source, duration=0.2)
                 audio = self.recognizer.listen(source, phrase_time_limit=10)
-            user_text = self.recognizer.recognize_google(audio)
-            self.send_to_lm_studio(user_text)
-        except Exception: pass
+
+            # Convert AudioData to NumPy array for Faster-Whisper
+            raw_data = audio.get_raw_data(convert_rate=16000, convert_width=2)
+            audio_np = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32) / 32768.0
+
+            segments, info = self.whisper_model.transcribe(audio_np, beam_size=1)
+            user_text = " ".join([segment.text for segment in segments]).strip()
+
+            if user_text:
+                self.send_to_lm_studio(user_text)
+        except Exception as e:
+            write_crash_log(f"Transcription Error: {e}")
 
     def activate(self):
         if not self.is_active:
@@ -172,6 +205,7 @@ class SidCore:
         self.root.geometry(f"+{x}+{y}")
 
 if __name__ == "__main__":
+    set_high_priority()
     root = tk.Tk()
     app = SidCore(root)
     root.mainloop()
