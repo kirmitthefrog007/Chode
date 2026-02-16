@@ -1,0 +1,8 @@
+faster-whisper
+psutil
+requests
+Pillow
+pynput
+SpeechRecognition
+pyttsx3
+numpy
