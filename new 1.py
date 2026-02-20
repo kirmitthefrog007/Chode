@@ -29,8 +29,8 @@ PATHS = {
     "SILLY_TAVERN": r"C:\Users\Yoda\SillyTavern\Start.bat"
 }
 
-URL_ALLTALK = "http://127.0.0.1:7852?__theme=dark" 
-ALLTALK_PORT = 7852
+URL_ALLTALK = "http://127.0.0.1:7851?__theme=dark"
+ALLTALK_PORT = 7851
 DESKTOP = os.path.join(os.path.expanduser("~"), "Desktop")
 LOG_PATH = os.path.join(DESKTOP, "LGR_BOOT_DIAGNOSTICS.txt")
 
@@ -136,13 +136,13 @@ def boot_logic(gui):
 
         # 4. Network Verification
         gui.update_status("STATUS", "Net: SCANNING...", TEXT_ACCENT)
-        if wait_for_port(ALLTALK_PORT):
+        if wait_for_port(ALLTALK_PORT, timeout=30):
             gui.update_status("ALLTALK", "Voice: READY")
             webbrowser.open_new_tab(URL_ALLTALK)
             gui.update_status("STATUS", "Net: ONLINE")
         else:
             gui.update_status("ALLTALK", "Voice: TIMEOUT", BORDER_COLOR)
-            log_event("NET", "Port 7852 failed to open within 90s.", True)
+            log_event("NET", f"Port {ALLTALK_PORT} failed to open within 30s.", True)
 
     except Exception as e:
         log_event("CRASH", traceback.format_exc(), True)
